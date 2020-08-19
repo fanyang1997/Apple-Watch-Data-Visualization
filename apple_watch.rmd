@@ -1,0 +1,306 @@
+---
+title: "Untitled"
+author: "Fan Yang E"
+date: "2020/8/11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+import r lib
+```{r}
+library(XML)
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(ggthemes)
+```
+load data
+```{r}
+path <- 'C:\\Users\\efynnaa\\Documents\\code\\apple_watch\\apple_watch'
+list.files(paste0(path, '/apple_health_export'))
+xml <- xmlParse(paste0(path, '/apple_health_export/export.xml'))
+summary(xml)
+```
+
+
+```{r}
+df_record <-   XML:::xmlAttrsToDataFrame(xml["//Record"])
+df_activity <- XML:::xmlAttrsToDataFrame(xml["//ActivitySummary"])
+df_workout <-  XML:::xmlAttrsToDataFrame(xml["//Workout"])
+df_clinical <- XML:::xmlAttrsToDataFrame(xml["//ClinicalRecord"])
+```
+
+```{r}
+df_location <- XML:::xmlAttrsToDataFrame(xml["//Location"]) 
+```
+```{r}
+ df <- df_record %>%
+  mutate(device = gsub(".*(name:)|,.*", "",device),
+         value = as.numeric(as.character(value)),
+         endDate = ymd_hms(endDate,tz="Asia/Shanghai"),
+         date = date(endDate),
+         year = year(endDate),
+         month = month(endDate),
+         day = day(endDate),
+         yday = yday(endDate),
+         wday = wday(endDate),
+         hour = hour(endDate),
+         minute = minute(endDate),
+         type = str_remove(type, "HKQuantityTypeIdentifier")
+         )
+```
+```{r}
+df %>%
+  arrange(endDate) %>% 
+  filter(type == 'WalkingHeartRateAverage') %>% 
+  filter(date > '2020/04/01') %>%
+  # Had to reduce sourceName to these 2 sources to avoid double-counting
+  # by other apps that use BodyMass and then store it back into Health
+   
+  
+  ggplot(aes(x= date, y = value)) +
+    geom_point(alpha = 0.3) +
+    geom_smooth(span = 0.2, col = "grey30", se = FALSE) +
+    labs(title = "Apple Health Weight Chart Sample",
+         caption = "@Fan Yang") +
+    theme(axis.text.y = element_blank()) # you shouldn't see these, lol
+
+
+
+```
+
+```{r}
+df %>%
+  filter(type %in% c('HeartRate', 'StepCount')) %>% 
+  group_by(type, hour) %>% 
+  summarise(value = mean(value)) %>% 
+  ggplot(aes(x = hour, y = value, fill = value)) +
+  geom_col() +
+  scale_fill_continuous(low = 'grey70', high = "#008FD5") +
+  scale_x_continuous(
+    breaks = c(0, 6, 12, 18),
+    label = c("Midnight", "6 AM", "Midday", "6 PM")
+  ) +
+  labs(title = "Apple Health Data",
+       subtitle = "Hourly Data Sample",
+       caption = '@Fan Yang') +
+  facet_wrap(~ type)+
+  guides(fill=FALSE)
+```
+```{r}
+df %>%
+  filter(type == 'StepCount') %>% 
+  group_by(date,wday,hour) %>% 
+  summarize(steps=sum(value)) %>% 
+  group_by(hour,wday) %>% 
+  summarize(steps=sum(steps)) %>% 
+  arrange(desc(steps)) %>%
+
+  ggplot(aes(x=hour, y=wday,  fill=steps)) + 
+    geom_tile(col = 'grey40') + 
+    scale_fill_continuous(labels = scales::comma, low = 'grey95', high = '#008FD5') +
+    theme(panel.grid.major = element_blank()) +
+    scale_x_continuous(
+      breaks = c(0, 6, 12, 18),
+      label = c("Midnight", "6 AM", "Midday", "6 PM")
+    ) +
+    scale_y_reverse(
+      breaks = c(1,2,3,4,5,6,7),
+      label = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+    ) +
+    labs(title = "Weekly Step Count Heatmap",
+         caption = '@Fan Yang') +
+    guides(fill=FALSE)+
+    coord_equal()
+```
+
+
+```{r cars}
+energy <- df %>%
+  filter(endDate >= '2020/04/01' & 
+           date < '2020/07/30' & 
+           type %in% c('BasalEnergyBurned', 'ActiveEnergyBurned', 'DietaryEnergyConsumed')) %>%
+  select(date, type, value) %>% 
+  group_by(date, type) %>% 
+  summarise(value = sum(value)) %>% 
+  ungroup()
+
+ggplot() +
+  geom_col(data = energy %>% 
+             filter(type != "DietaryEnergyConsumed"),
+             aes(x= date, y = value, fill = type)) +
+  scale_fill_manual(values = c("BasalEnergyBurned" = "#3182bd", 
+                               "ActiveEnergyBurned" = "#9ecae1", 
+                               "DietaryEnergyConsumed" = "grey30")) +
+  geom_col(data = energy %>% 
+             filter(type == "DietaryEnergyConsumed"), 
+             aes(x= date, y = value, fill = type),  width = 0.7, alpha = 0.6) +
+  labs(title = "Calories Consumed & Burned",
+       caption = '@Fan Yang')
+
+ggsave('energy1.png', width = 8, height = 6, units = "in")
+```
+
+```{r}
+energy_spread <- energy %>% 
+  spread(type, value) %>% 
+  mutate(EnergyBurned = ActiveEnergyBurned + BasalEnergyBurned,
+         EnergyConsumed = DietaryEnergyConsumed,
+         EnergyDeficit = EnergyBurned - EnergyConsumed,
+         EnergyDeficitPct = EnergyDeficit / EnergyBurned,
+         EnergyDeficitCat = if_else(EnergyDeficit > 0, 'Deficit', 'Surplus'))
+energy_spread %>% 
+  ggplot(aes(x= date, y = EnergyDeficitPct, fill = EnergyDeficitCat)) +
+  geom_col() +
+  scale_fill_manual(values = c("#1a9641", "#ca0020"))+
+  labs(title = "Calorie deficit and surplus",
+       caption = '@taraskaduk | taraskaduk.com')
+```
+```{r}
+df %>%
+  filter(type %in% c('DietaryFatSaturated', 'DietaryProtein', 'DietaryCholesterol', 'DietaryPotassium')) %>% 
+  mutate(type = str_remove(type, "Dietary")) %>% 
+  group_by(type, date) %>% 
+  summarise(value = sum(value)) %>% 
+  
+  ggplot(aes(x= date, y = value)) +
+    geom_smooth(span = 0.7, alpha = 0.2, col = "grey30", se = FALSE) +
+    geom_point(alpha = 0.5) +
+    facet_wrap(~type, scales="free") +
+    labs(title = "Nutrition Micros and Macros to Track",
+         caption = '@taraskaduk | taraskaduk.com')
+```
+```{r}
+blood_pressure <- df %>%
+  filter(type %in% c('BloodPressureSystolic', "BloodPressureDiastolic")) %>% 
+  mutate(type = str_remove(type, "BloodPressure")) %>% 
+  select(value, type, date:hour) %>% 
+  group_by_at(vars(-value)) %>% 
+  summarise(value = mean(value)) %>% 
+  mutate(morning = if_else(hour >=5 & hour <= 8, TRUE, FALSE),
+         stage = factor(if_else(type == "Systolic",
+                              case_when(value <  xxx ~ "Normal",
+                                        value <  xxx ~ "Elevated",
+                                        value <  xxx ~ "Hypertension 1",
+                                        value <  xxx ~ "Hypertension 2",
+                                        value >= xxx ~ "Hypertensive Crisis",
+                                        TRUE ~ NA_character_),
+                              case_when(value <  xxx ~ "Normal",
+                                        value <  xxx ~ "Elevated",
+                                        value <  xxx ~ "Hypertension 1",
+                                        value <  xxx ~ "Hypertension 2",
+                                        value >= xxx ~ "Hypertensive Crisis",
+                                        TRUE ~ NA_character_)),
+                      levels = c("Normal",
+                                 "Elevated",
+                                 "Hypertension 1",
+                                 "Hypertension 2",
+                                 "Hypertensive Crisis")))
+
+
+blood_pressure  %>% 
+  filter(morning == TRUE) %>% 
+  ggplot(aes(x= date, y = value, group = type, col = stage)) +
+  geom_smooth(span = 0.7, alpha = 0.4, col = "grey40", se = FALSE) +
+  geom_point(size = 3, alpha = 0.7) + 
+  scale_color_brewer(palette = "RdYlGn", direction = -1) +
+  labs(title = "Blood pressure",
+       subtitle = "Systolic and Diastolic",
+       caption = '@taraskaduk | taraskaduk.com')
+```
+
+```{r}
+#Some data clean up  and renaming here
+df_activity_tidy <- df_activity %>% 
+  select(-activeEnergyBurnedUnit) %>% 
+  mutate_all(as.character) %>% 
+  mutate(date = as.Date(dateComponents)) %>% 
+  filter(date >= "2018-11-13") %>% 
+  select(-dateComponents) %>% 
+  mutate_if(is.character, as.numeric) %>% 
+  rename(move = activeEnergyBurned,
+         exercise = appleExerciseTime,
+         stand = appleStandHours,
+         move_goal = activeEnergyBurnedGoal,
+         exercise_goal = appleExerciseTimeGoal,
+         stand_goal = appleStandHoursGoal) %>% 
+#Now, create 2 new metrics: percent of goal and a "Yes/No" flag.
+  mutate(move_pct = move/move_goal,
+         exercise_pct = exercise/exercise_goal,
+         stand_pct = stand/stand_goal,
+         move_bool = if_else(move_pct < 1, FALSE, TRUE),
+         exercise_bool = if_else(exercise_pct < 1, FALSE, TRUE),
+         stand_bool = if_else(stand_pct < 1, FALSE, TRUE))
+```
+
+```{r}
+
+df_activity_tall_value <- df_activity_tidy %>% 
+  select(date, Move = move, Exercise = exercise, Stand = stand) %>% 
+  gather(category, value, -date)
+
+df_activity_tall_pct <- df_activity_tidy %>% 
+  select(date, Move = move_pct, Exercise = exercise_pct, Stand = stand_pct) %>% 
+  gather(category, pct, -date)
+
+df_activity_tall_bool <- df_activity_tidy %>% 
+  select(date, Move = move_bool, Exercise = exercise_bool, Stand = stand_bool) %>% 
+  gather(category, boolean, -date)
+  
+df_activity_tall <- df_activity_tall_value %>% 
+  left_join(df_activity_tall_pct, by = c("date", "category")) %>% 
+  left_join(df_activity_tall_bool, by = c("date", "category")) %>% 
+  mutate(category = as_factor(category, levels = c("Move", "Exercise", "Stand")), ///////////////////
+         month = ymd(paste(year(date), month(date), 1, sep = "-")),
+         week = date - wday(date) + 1,
+         wday = wday(date),
+         day = day(date))
+```
+
+```{r}
+df_activity_tall %>% 
+  ggplot(aes(x = wday, y = week, fill = boolean)) +
+    geom_tile(col = "grey30", na.rm = FALSE) +
+    theme(panel.grid.major = element_blank()) +
+    scale_fill_manual(values = c("grey80", "#1a9641")) +
+    facet_wrap(~ category) +
+    coord_fixed(ratio = 0.15) +
+    guides(fill=FALSE) +
+    labs(title = "Apple Watch goals completion",
+         caption = '@taraskaduk | taraskaduk.com') +
+    theme(axis.text.x = element_blank()
+```
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+df %>%
+  filter(type == 'StepCount') %>% 
+  group_by(date,wday,hour) %>% 
+  summarize(steps=sum(value)) %>% 
+  group_by(hour,wday) %>% 
+  summarize(steps=sum(steps)) %>% 
+  arrange(desc(steps)) %>%
+
+  ggplot(aes(x=hour, y=wday,  fill=steps)) + 
+    geom_tile(col = 'grey40') + 
+    scale_fill_continuous(labels = scales::comma, low = 'grey95', high = '#008FD5') +
+    theme(panel.grid.major = element_blank()) +
+    scale_x_continuous(
+      breaks = c(0, 6, 12, 18),
+      label = c("Midnight", "6 AM", "Midday", "6 PM")
+    ) +
+    scale_y_reverse(
+      breaks = c(1,2,3,4,5,6,7),
+      label = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+    ) +
+    labs(title = "Weekly Step Count Heatmap",
+         caption = '@Fan Yang') +
+    guides(fill=FALSE)+
+    coord_equal()
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
